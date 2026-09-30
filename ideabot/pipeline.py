@@ -1,0 +1,169 @@
+"""Очередь идей. Главное правило: идея не теряется, при любом сбое она в vault или в БД с кнопкой повтора."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from pathlib import Path
+from typing import Awaitable, Callable, Protocol
+
+from .brain import BrainError
+from .config import Settings
+from .db import DB
+from .models import Link
+from .vault.index import build_index
+from .vault.sync import Writer
+
+log = logging.getLogger(__name__)
+
+
+class Notifier(Protocol):
+    async def refresh(self, idea_id: int) -> None: ...
+    async def busy(self, idea_id: int, text: str) -> None: ...
+    async def error(self, idea_id: int, text: str) -> None: ...
+
+
+class Pipeline:
+    def __init__(self, s: Settings, db: DB, writer: Writer, brain, stt: Callable[[Path], Awaitable[str]],
+                 notifier: Notifier, index_fn=build_index):
+        self.s, self.db, self.writer, self.brain, self.stt = s, db, writer, brain, stt
+        self.notifier = notifier
+        self.index_fn = index_fn
+        self.q: asyncio.Queue = asyncio.Queue()
+        self.vault_lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task] = set()
+
+    def submit(self, idea_id: int) -> None:
+        self.q.put_nowait(("process", idea_id, ()))
+
+    def spawn(self, coro) -> None:
+        t = asyncio.create_task(coro)
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
+    def startup(self) -> None:
+        for idea in self.db.by_status("new"):
+            self.submit(idea.id)
+        for idea in self.db.by_status("write_failed"):
+            self.q.put_nowait(("write", idea.id, ()))
+
+    async def run(self) -> None:
+        while True:
+            kind, idea_id, args = await self.q.get()
+            try:
+                await getattr(self, kind)(idea_id, *args)
+            except Exception:
+                log.exception("%s #%s упал", kind, idea_id)
+            finally:
+                self.q.task_done()
+
+    async def retry_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.s.retry_every)
+            for idea in self.db.by_status("write_failed"):
+                self.q.put_nowait(("write", idea.id, ()))
+
+    async def process(self, idea_id: int) -> None:
+        idea = self.db.get(idea_id)
+        if idea is None or idea.status not in ("new", "stt_failed", "raw"):
+            return
+        inc = idea.incoming
+        for part in inc.parts:
+            if not part.voice:
+                continue
+            try:
+                part.text = ((part.text + "\n\n") if part.text else "") + (await self.stt(Path(part.voice))).strip()
+            except Exception as e:
+                log.warning("stt #%s: %s", idea_id, e)
+                self.db.update(idea_id, status="stt_failed", error=str(e))
+                await self.notifier.refresh(idea_id)
+                return
+            part.voice, part.was_voice = None, True
+            self.db.update(idea_id, payload=inc.to_json())
+        if inc.is_empty():
+            self.db.update(idea_id, status="undone", error="пустое сообщение")
+            await self.notifier.refresh(idea_id)
+            return
+        try:
+            a = await self.brain.analyze(inc, self.index_fn(self.s))
+        except BrainError as e:
+            log.warning("brain #%s: %s", idea_id, e)
+            if idea.status != "raw":
+                async with self.vault_lock:
+                    self.writer.save_raw(idea_id, inc)
+            self.db.update(idea_id, status="raw", error=str(e))
+            await self.notifier.refresh(idea_id)
+            return
+        self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False), error=None)
+        if a.duplicate_of:
+            self.db.update(idea_id, status="await_dup")
+            await self.notifier.refresh(idea_id)
+            return
+        self.db.update(idea_id, mode="new")
+        await self.write(idea_id)
+
+    async def write(self, idea_id: int) -> None:
+        idea = self.db.get(idea_id)
+        a, inc = idea.parsed, idea.incoming
+        async with self.vault_lock:
+            try:
+                if idea.note_path:
+                    self.writer.undo(idea_id)  # хвосты сырой или недописанной записи
+                index = self.index_fn(self.s)
+                a.links = [link for link in a.links if link.l2 in index.l2]
+                append = idea.mode == "append" and (self.s.ideas_dir / f"{a.duplicate_of}.md").exists()
+                if append:
+                    self.writer.append(idea_id, a.duplicate_of, a, inc, index)
+                else:
+                    self.writer.save_new(idea_id, a, inc, index)
+            except (OSError, ValueError) as e:  # ValueError: холст с битым JSON
+                log.warning("write #%s: %s", idea_id, e)
+                self.db.update(idea_id, status="write_failed", error=str(e))
+                await self.notifier.refresh(idea_id)
+                return
+        self.db.update(idea_id, status="saved", mode="append" if append else "new",
+                       analysis=json.dumps(a.to_dict(), ensure_ascii=False), error=None)
+        await self.notifier.refresh(idea_id)
+
+    async def resolve_duplicate(self, idea_id: int, append: bool) -> None:
+        if self.db.get(idea_id).status != "await_dup":
+            return
+        self.db.update(idea_id, mode="append" if append else "new")
+        await self.write(idea_id)
+
+    async def relink(self, idea_id: int, l2_names: list[str]) -> None:
+        idea = self.db.get(idea_id)
+        if idea.status != "saved" or idea.mode != "new":
+            return
+        a = idea.parsed
+        index = self.index_fn(self.s)
+        try:
+            links = await self.brain.pick_l3(a, l2_names, index)
+        except BrainError as e:
+            log.warning("pick_l3 #%s: %s", idea_id, e)
+            links = [Link(n) for n in l2_names if n in index.l2]
+        async with self.vault_lock:
+            self.writer.relink(idea_id, links, index)
+        a.links = links
+        self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False))
+        await self.notifier.refresh(idea_id)
+
+    async def deep(self, idea_id: int) -> None:
+        idea = self.db.get(idea_id)
+        if idea.status != "saved" or idea.deep:
+            return
+        try:
+            md = await self.brain.deep_dive(idea.parsed)
+        except BrainError as e:
+            await self.notifier.error(idea_id, f"Не вышло копнуть глубже: {e}")
+            await self.notifier.refresh(idea_id)
+            return
+        async with self.vault_lock:
+            self.writer.add_deep(idea_id, md)
+        await self.notifier.refresh(idea_id)
+
+    async def undo(self, idea_id: int) -> None:
+        async with self.vault_lock:
+            self.writer.undo(idea_id)
+        self.db.update(idea_id, status="undone")
+        await self.notifier.refresh(idea_id)
