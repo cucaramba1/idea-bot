@@ -23,6 +23,15 @@ HELLO = ("Кидай идею: текст, голос или форвард (м�
          "Хочешь привязать к конкретному холсту, добавь #название, например #медиабаинг или #личный_бренд.")
 
 
+def selected_names(picks: dict[int, tuple[list, set]], idea_id: int) -> list | None:
+    """Достаёт и убирает выбор пользователя. None значит список устарел (например после рестарта бота)."""
+    entry = picks.pop(idea_id, None)
+    if entry is None:
+        return None
+    names, sel = entry
+    return [names[n] for n in sorted(sel)]
+
+
 def origin_name(o) -> str:
     if isinstance(o, MessageOriginChannel):
         return o.chat.title or "канал"
@@ -139,10 +148,14 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
     @r.callback_query(F.data.regexp(r"^ok:\d+$"))
     async def done(c: CallbackQuery):
         i = _id(c)
-        names, sel = picks.pop(i, ([], set()))
+        names = selected_names(picks, i)
+        if names is None:
+            await c.answer("Список устарел, нажми «Поменять холсты» ещё раз")
+            await notifier.refresh(i)
+            return
         await c.answer("Перевешиваю…")
         await notifier.busy(i, "🔁 Перевешиваю связи…")
-        pipeline.spawn(pipeline.relink(i, [names[n] for n in sorted(sel)]))
+        pipeline.spawn(pipeline.relink(i, names))
 
     @r.callback_query(F.data.regexp(r"^bk:\d+$"))
     async def back(c: CallbackQuery):

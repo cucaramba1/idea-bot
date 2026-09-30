@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -152,6 +153,66 @@ def test_empty_idea_is_undone(settings, tmp_path):
     i = db.create(1, Incoming([Part(text="   ")]))
     asyncio.run(p.process(i))
     assert db.get(i).status == "undone"
+
+
+def test_l3_vanished_before_write_falls_back_to_l2_only(settings, tmp_path):
+    a = A(links=[Link("Медиабаинг", "Офферы и связки", "file")])
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    mb = Canvas.load(settings.vault / "Медиабаинг.canvas")
+    mb.remove_node("n-off")  # L3 (нода заметки) пропала с холста между анализом и записью
+    mb.save()
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    idea = db.get(i)
+    assert idea.status == "saved"
+    assert [l.l3 for l in idea.parsed.links] == [None]
+
+
+def test_brain_subprocess_missing_binary_saves_raw(settings, tmp_path):
+    class BadBinaryBrain:
+        async def analyze(self, inc, index):
+            from ideabot.brain import run_claude
+            settings.claude_bin = str(tmp_path / "нет-такого-бинаря")
+            return await run_claude(settings, "x", system="S", schema={"type": "object"}, timeout=5)
+
+    db, p = make(settings, tmp_path, BadBinaryBrain())
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    idea = db.get(i)
+    assert idea.status == "raw" and idea.note_path is not None
+
+
+def test_retry_excludes_own_raw_note_from_existing_ideas(settings, tmp_path):
+    brain = FakeBrain(A(), fail=True)
+    db, p = make(settings, tmp_path, brain)
+    i = db.create(1, Incoming([Part(text="сырая мысль про кофе")]))
+    asyncio.run(p.process(i))
+    assert db.get(i).status == "raw"
+    raw_stem = Path(db.get(i).note_path).stem
+
+    class RecordingBrain(FakeBrain):
+        async def analyze(self, inc, index):
+            self.seen_ideas = list(index.ideas)
+            return await super().analyze(inc, index)
+
+    recorder = RecordingBrain(A())
+    p.brain = recorder
+    asyncio.run(p.process(i))
+    assert raw_stem not in recorder.seen_ideas
+
+
+def test_write_does_not_resurrect_an_undone_idea(settings, tmp_path):
+    """Двойная постановка в очередь (retry_loop + повторная обработка) не должна воскрешать отменённую идею."""
+    db, p = make(settings, tmp_path, FakeBrain(A()))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    note_path = db.get(i).note_path
+    asyncio.run(p.undo(i))
+    assert db.get(i).status == "undone"
+    asyncio.run(p.write(i))  # хвост второй копии "write" в очереди, идея уже отменена
+    idea = db.get(i)
+    assert idea.status == "undone"
+    assert not (settings.vault / note_path).exists()
 
 
 def test_relink_deep_undo(settings, tmp_path):

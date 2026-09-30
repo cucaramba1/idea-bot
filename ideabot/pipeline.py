@@ -7,7 +7,9 @@ import logging
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
-from .brain import BrainError
+from dataclasses import asdict
+
+from .brain import BrainError, clean_links
 from .config import Settings
 from .db import DB
 from .models import Link
@@ -15,6 +17,7 @@ from .vault.index import build_index
 from .vault.sync import Writer
 
 log = logging.getLogger(__name__)
+WRITABLE_STATUSES = ("new", "raw", "stt_failed", "write_failed", "await_dup")
 
 
 class Notifier(Protocol):
@@ -84,8 +87,12 @@ class Pipeline:
             self.db.update(idea_id, status="undone", error="пустое сообщение")
             await self.notifier.refresh(idea_id)
             return
+        index = self.index_fn(self.s)
+        if idea.note_path:  # ретрай: заметка (сырая или недописанная) не должна выглядеть как «уже существующая идея»
+            own_stem = Path(idea.note_path).stem
+            index.ideas = [name for name in index.ideas if name != own_stem]
         try:
-            a = await self.brain.analyze(inc, self.index_fn(self.s))
+            a = await self.brain.analyze(inc, index)
         except BrainError as e:
             log.warning("brain #%s: %s", idea_id, e)
             if idea.status != "raw":
@@ -104,19 +111,21 @@ class Pipeline:
 
     async def write(self, idea_id: int) -> None:
         idea = self.db.get(idea_id)
+        if idea is None or idea.status not in WRITABLE_STATUSES:
+            return  # идея уже записана/отменена: хвост повторной постановки в очередь
         a, inc = idea.parsed, idea.incoming
         async with self.vault_lock:
             try:
                 if idea.note_path:
                     self.writer.undo(idea_id)  # хвосты сырой или недописанной записи
                 index = self.index_fn(self.s)
-                a.links = [link for link in a.links if link.l2 in index.l2]
+                a.links = clean_links([asdict(link) for link in a.links], index)
                 append = idea.mode == "append" and (self.s.ideas_dir / f"{a.duplicate_of}.md").exists()
                 if append:
                     self.writer.append(idea_id, a.duplicate_of, a, inc, index)
                 else:
                     self.writer.save_new(idea_id, a, inc, index)
-            except (OSError, ValueError) as e:  # ValueError: холст с битым JSON
+            except Exception as e:  # холст с битым JSON, пропавший L3, диск и т.п. — идея не должна зависнуть
                 log.warning("write #%s: %s", idea_id, e)
                 self.db.update(idea_id, status="write_failed", error=str(e))
                 await self.notifier.refresh(idea_id)
