@@ -1,0 +1,8 @@
+ideas_canvas: Творческие идеи
+shallow_canvases: [Досуг, Фитнес и здоровье]
+goals_note: Продуктивность и привычки/Мои цели.md
+collect_window: 5
+claude_timeout: 180
+deep_timeout: 300
+retry_every: 300
+max_index_chars: 60000
