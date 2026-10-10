@@ -116,6 +116,66 @@ def test_duplicate_target_deleted_falls_back_to_new(settings, tmp_path):
     assert idea.status == "saved" and idea.mode == "new" and idea.note_path.endswith("Мысль.md")
 
 
+def test_new_theme_asks_then_creates(settings, tmp_path):
+    a = A(new_theme={"name": "Идеи для НАП", "closest_existing": "Контент"})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="создай тему и запиши идею")]))
+    asyncio.run(p.process(i))
+    idea = db.get(i)
+    assert idea.status == "await_theme"
+    assert idea.parsed.new_theme == {"name": "Идеи для НАП", "closest_existing": "Контент"}
+    assert idea.note_path is None
+
+    asyncio.run(p.resolve_theme_create(i))
+    idea = db.get(i)
+    assert idea.status == "saved" and idea.parsed.theme == "Идеи для НАП" and idea.parsed.new_theme is None
+    assert "Идеи для НАП" in settings.themes
+    cv = Canvas.load(settings.ideas_canvas_path)
+    assert cv.group("Идеи для НАП") is not None
+
+
+def test_new_theme_use_existing(settings, tmp_path):
+    a = A(new_theme={"name": "Идеи для НАП", "closest_existing": "Контент"})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    asyncio.run(p.resolve_theme_existing(i, "Контент"))
+    idea = db.get(i)
+    assert idea.status == "saved" and idea.parsed.theme == "Контент" and idea.parsed.new_theme is None
+    assert "Идеи для НАП" not in settings.themes
+
+
+def test_new_theme_stale_tap_is_noop(settings, tmp_path):
+    a = A(new_theme={"name": "Идеи для НАП", "closest_existing": None})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    asyncio.run(p.resolve_theme_create(i))
+    before = db.get(i).note_path
+    asyncio.run(p.resolve_theme_create(i))  # повторный тап после того, как идея уже записана
+    asyncio.run(p.resolve_theme_existing(i, "Контент"))
+    assert db.get(i).note_path == before and db.get(i).parsed.theme == "Идеи для НАП"
+
+
+def test_new_theme_after_duplicate_resolved_as_new(settings, tmp_path):
+    a = A(duplicate_of="Старая идея", new_theme={"name": "Идеи для НАП", "closest_existing": None})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    assert db.get(i).status == "await_dup"
+    asyncio.run(p.resolve_duplicate(i, append=False))
+    assert db.get(i).status == "await_theme"  # дубликат разрешился в "новую", вопрос про тему всё ещё впереди
+
+
+def test_new_theme_after_duplicate_resolved_as_append_skips_theme(settings, tmp_path):
+    a = A(duplicate_of="Старая идея", new_theme={"name": "Идеи для НАП", "closest_existing": None})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+    asyncio.run(p.resolve_duplicate(i, append=True))
+    assert db.get(i).status == "saved" and db.get(i).mode == "append"  # append не спрашивает про тему
+
+
 def test_write_failure_then_retry_no_duplicates(settings, tmp_path, monkeypatch):
     db, p = make(settings, tmp_path, FakeBrain(A()))
     i = db.create(1, Incoming([Part(text="x")]))

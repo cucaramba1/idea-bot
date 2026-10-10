@@ -11,13 +11,14 @@ from dataclasses import asdict
 
 from .brain import BrainError, clean_links
 from .config import Settings
+from .config_themes import add_theme
 from .db import DB
-from .models import Link
+from .models import Analysis, Link
 from .vault.index import build_index
 from .vault.sync import Writer
 
 log = logging.getLogger(__name__)
-WRITABLE_STATUSES = ("new", "raw", "stt_failed", "write_failed", "await_dup")
+WRITABLE_STATUSES = ("new", "raw", "stt_failed", "write_failed", "await_dup", "await_theme")
 
 
 class Notifier(Protocol):
@@ -107,6 +108,13 @@ class Pipeline:
             await self.notifier.refresh(idea_id)
             return
         self.db.update(idea_id, mode="new")
+        await self._route_new(idea_id, a)
+
+    async def _route_new(self, idea_id: int, a: Analysis) -> None:
+        if a.new_theme:
+            self.db.update(idea_id, status="await_theme")
+            await self.notifier.refresh(idea_id)
+            return
         await self.write(idea_id)
 
     async def write(self, idea_id: int) -> None:
@@ -138,6 +146,36 @@ class Pipeline:
         if self.db.get(idea_id).status != "await_dup":
             return
         self.db.update(idea_id, mode="append" if append else "new")
+        if append:
+            await self.write(idea_id)
+        else:
+            await self._route_new(idea_id, self.db.get(idea_id).parsed)
+
+    async def resolve_theme_create(self, idea_id: int) -> None:
+        idea = self.db.get(idea_id)
+        if idea is None or idea.status != "await_theme":
+            return
+        a = idea.parsed
+        name = a.new_theme["name"]
+        try:
+            async with self.vault_lock:
+                add_theme(self.s, name)
+        except Exception as e:
+            log.warning("add_theme #%s: %s", idea_id, e)
+            self.db.update(idea_id, status="write_failed", error=str(e))
+            await self.notifier.refresh(idea_id)
+            return
+        a.theme, a.new_theme = name, None
+        self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False))
+        await self.write(idea_id)
+
+    async def resolve_theme_existing(self, idea_id: int, theme_name: str) -> None:
+        idea = self.db.get(idea_id)
+        if idea is None or idea.status != "await_theme" or theme_name not in self.s.themes:
+            return
+        a = idea.parsed
+        a.theme, a.new_theme = theme_name, None
+        self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False))
         await self.write(idea_id)
 
     async def relink(self, idea_id: int, l2_names: list[str]) -> None:
