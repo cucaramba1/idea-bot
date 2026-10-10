@@ -55,6 +55,38 @@ def test_validate_fixes_everything(settings):
     assert b.score == 7 and b.title == "Идея без названия" and b.duplicate_of == "Старая идея"
 
 
+def test_validate_new_theme_normalizes(settings):
+    ix = build_index(settings)
+    # имя совпадает с уже существующей темой: диалог не нужен, тема используется напрямую
+    a = validate({"type": "прочее", "theme": "Контент", "title": "T", "body_md": "b", "score": None,
+                  "links": [], "duplicate_of": None, "new_theme": {"name": "Геймдизайн", "closest_existing": None}},
+                 ix, settings, [], [])
+    assert a.theme == "Геймдизайн" and a.new_theme is None
+
+    # новое имя, closest_existing валиден
+    a = validate({"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None,
+                  "links": [], "duplicate_of": None,
+                  "new_theme": {"name": "Идеи для НАП", "closest_existing": "Контент"}}, ix, settings, [], [])
+    assert a.new_theme == {"name": "Идеи для НАП", "closest_existing": "Контент"}
+
+    # closest_existing не входит в список тем: обнуляется
+    a = validate({"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None,
+                  "links": [], "duplicate_of": None,
+                  "new_theme": {"name": "Идеи для НАП", "closest_existing": "Выдумка"}}, ix, settings, [], [])
+    assert a.new_theme == {"name": "Идеи для НАП", "closest_existing": None}
+
+    # new_theme отсутствует: поведение не меняется
+    a = validate({"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None,
+                  "links": [], "duplicate_of": None, "new_theme": None}, ix, settings, [], [])
+    assert a.new_theme is None
+
+    # пустое имя в new_theme игнорируется как отсутствие предложения
+    a = validate({"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None,
+                  "links": [], "duplicate_of": None, "new_theme": {"name": "  ", "closest_existing": None}},
+                 ix, settings, [], [])
+    assert a.new_theme is None
+
+
 def test_run_claude_structured_and_flags(tmp_path, settings):
     settings.claude_bin = fake_claude(tmp_path, {"is_error": False, "structured_output": {"ok": 1}})
     out = asyncio.run(run_claude(settings, "привет", system="S", schema={"type": "object"},
