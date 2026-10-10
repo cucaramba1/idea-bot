@@ -167,6 +167,25 @@ def test_new_theme_after_duplicate_resolved_as_new(settings, tmp_path):
     assert db.get(i).status == "await_theme"  # дубликат разрешился в "новую", вопрос про тему всё ещё впереди
 
 
+def test_new_theme_create_failure_keeps_await_theme_for_retry(settings, tmp_path, monkeypatch):
+    a = A(new_theme={"name": "Идеи для НАП", "closest_existing": None})
+    db, p = make(settings, tmp_path, FakeBrain(a))
+    i = db.create(1, Incoming([Part(text="x")]))
+    asyncio.run(p.process(i))
+
+    import ideabot.pipeline as pipeline_module
+
+    def boom(s, name):
+        raise OSError("диск")
+
+    monkeypatch.setattr(pipeline_module, "add_theme", boom)
+    asyncio.run(p.resolve_theme_create(i))
+    idea = db.get(i)
+    assert idea.status == "await_theme" and idea.note_path is None and idea.parsed.new_theme is not None
+    assert "Идеи для НАП" not in settings.themes
+    assert any(kind == "error" for kind, _ in p.notifier.events)
+
+
 def test_new_theme_after_duplicate_resolved_as_append_skips_theme(settings, tmp_path):
     a = A(duplicate_of="Старая идея", new_theme={"name": "Идеи для НАП", "closest_existing": None})
     db, p = make(settings, tmp_path, FakeBrain(a))

@@ -161,8 +161,10 @@ class Pipeline:
             async with self.vault_lock:
                 add_theme(self.s, name)
         except Exception as e:
+            # статус остаётся await_theme (не write_failed): фоновый retry_loop трогает только
+            # write_failed, а тут нужен новый тап владельца, иначе идея воскреснет в старой теме
             log.warning("add_theme #%s: %s", idea_id, e)
-            self.db.update(idea_id, status="write_failed", error=str(e))
+            await self.notifier.error(idea_id, f"Не смог создать тему, попробуй ещё раз: {e}")
             await self.notifier.refresh(idea_id)
             return
         a.theme, a.new_theme = name, None
