@@ -36,3 +36,10 @@ def test_analysis_roundtrip():
     a = Analysis(type="бизнес", theme="Контент", title="T", body_md="B", score=7,
                  links=[Link("Медиабаинг", "Офферы", "group")], duplicate_of=None, unknown_tags=["xx"])
     assert Analysis.from_dict(a.to_dict()) == a
+
+
+def test_analysis_roundtrip_with_new_theme():
+    a = Analysis(type="бизнес", theme="Разное", title="T", body_md="B",
+                 new_theme={"name": "Идеи для НАП", "closest_existing": "Нячанг"})
+    assert Analysis.from_dict(a.to_dict()) == a
+    assert Analysis(type="мысль", theme="Разное", title="T", body_md="B").new_theme is None

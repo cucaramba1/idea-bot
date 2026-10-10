@@ -76,6 +76,7 @@ class Analysis:
     links: list[Link] = field(default_factory=list)
     duplicate_of: str | None = None
     unknown_tags: list[str] = field(default_factory=list)
+    new_theme: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
