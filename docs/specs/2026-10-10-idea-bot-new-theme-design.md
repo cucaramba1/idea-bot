@@ -33,24 +33,24 @@
 Некит: "Создай тему X и занеси идею Y"
         │
         ▼
-brain.analyze() возвращает Analysis с new_theme = {name: "X", closest_existing: "Нячанг" | null}
+brain.analyze() возвращает Analysis с new_theme = {name: "X", closest_existing: "Z" | null}
         │
         ▼
 pipeline: a.new_theme не пусто, не дубликат, не append
         │
         ▼
-status = "await_theme", карточка в Telegram:
+status = "await_theme", карточка в Telegram (Z, если есть, это существующая L1-тема из config/themes.yaml, не L2-холст):
   ┌─────────────────────────────────────┐
   │ 🆕 Хочешь завести тему «X»?          │
-  │ Похоже на «Нячанг» — положить туда?  │
+  │ Похоже на «Z» — положить туда?       │
   │                                       │
-  │ [🆕 Создать «X»] [📂 Использовать «Нячанг»] │
+  │ [🆕 Создать «X»] [📂 Использовать «Z»] │
   │ [📋 Другая тема]                     │
   └─────────────────────────────────────┘
         │                    │                      │
         ▼                    ▼                      ▼
   resolve_theme_create  resolve_theme_existing  список тем кнопками →
-  (дописывает          (a.theme = "Нячанг",     resolve_theme_existing
+  (дописывает          (a.theme = "Z",          resolve_theme_existing
    config/themes.yaml,  write())                 с выбранным именем
    s.themes.append,
    a.theme = "X",
