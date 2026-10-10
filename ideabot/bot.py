@@ -10,7 +10,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import (CallbackQuery, Message, MessageOriginChannel, MessageOriginChat,
                            MessageOriginHiddenUser, MessageOriginUser)
 
-from .cards import card_kb, card_text, l2_kb
+from .cards import card_kb, card_text, l2_kb, theme_kb
 from .collector import Collector
 from .config import Settings
 from .db import DB
@@ -179,6 +179,48 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
         await c.answer()
         await notifier.busy(_id(c), "⏳ Записываю…")
         pipeline.spawn(pipeline.resolve_duplicate(_id(c), append=c.data.endswith(":a")))
+
+    @r.callback_query(F.data.regexp(r"^nt:\d+:c$"))
+    async def new_theme_create(c: CallbackQuery):
+        await c.answer()
+        await notifier.busy(_id(c), "🆕 Завожу тему…")
+        pipeline.spawn(pipeline.resolve_theme_create(_id(c)))
+
+    @r.callback_query(F.data.regexp(r"^nt:\d+:u$"))
+    async def new_theme_use_closest(c: CallbackQuery):
+        i = _id(c)
+        idea = db.get(i)
+        nt = idea.parsed.new_theme if idea and idea.parsed else None
+        closest = nt.get("closest_existing") if nt else None
+        if not closest:
+            await c.answer("Нет похожей темы")
+            return
+        await c.answer()
+        await notifier.busy(i, "⏳ Записываю…")
+        pipeline.spawn(pipeline.resolve_theme_existing(i, closest))
+
+    @r.callback_query(F.data.regexp(r"^nt:\d+:o$"))
+    async def new_theme_other(c: CallbackQuery):
+        i = _id(c)
+        await c.message.edit_reply_markup(reply_markup=theme_kb(i, sorted(s.themes)))
+        await c.answer()
+
+    @r.callback_query(F.data.regexp(r"^th:\d+:\d+$"))
+    async def theme_pick(c: CallbackQuery):
+        i, n = _id(c), int(c.data.split(":")[2])
+        names = sorted(s.themes)
+        if n >= len(names):
+            await c.answer("Список устарел, нажми «Поменять холсты» ещё раз")
+            await notifier.refresh(i)
+            return
+        await c.answer()
+        await notifier.busy(i, "⏳ Записываю…")
+        pipeline.spawn(pipeline.resolve_theme_existing(i, names[n]))
+
+    @r.callback_query(F.data.regexp(r"^bk2:\d+$"))
+    async def theme_back(c: CallbackQuery):
+        await notifier.refresh(_id(c))
+        await c.answer()
 
     @r.callback_query(F.data.regexp(r"^rt:\d+$"))
     async def retry(c: CallbackQuery):
