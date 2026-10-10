@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram.types import Chat, MessageOriginChannel, MessageOriginHiddenUser, MessageOriginUser, User
 
 from ideabot.bot import origin_name
-from ideabot.cards import card_kb, card_text, l2_kb
+from ideabot.cards import card_kb, card_text, l2_kb, theme_kb
 from ideabot.db import Idea
 
 
@@ -41,6 +41,30 @@ def test_other_statuses():
     assert buttons(card_kb(idea("stt_failed"))) == ["rt:5"]
     assert buttons(card_kb(idea("await_dup"))) == ["du:5:a", "du:5:n"]
     assert card_kb(idea("undone")) is None and card_kb(idea("write_failed")) is None
+
+
+def test_await_theme_card_with_closest():
+    i = idea("await_theme", analysis=json.dumps(
+        {"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None, "links": [],
+         "duplicate_of": None, "unknown_tags": [], "new_theme": {"name": "Идеи для НАП", "closest_existing": "Нячанг"}},
+        ensure_ascii=False))
+    assert card_text(i) == "🆕 Завести тему «Идеи для НАП»? Похоже на «Нячанг», можно сразу туда."
+    assert buttons(card_kb(i)) == ["nt:5:c", "nt:5:u", "nt:5:o"]
+
+
+def test_await_theme_card_without_closest():
+    i = idea("await_theme", analysis=json.dumps(
+        {"type": "прочее", "theme": "Разное", "title": "T", "body_md": "b", "score": None, "links": [],
+         "duplicate_of": None, "unknown_tags": [], "new_theme": {"name": "Идеи для НАП", "closest_existing": None}},
+        ensure_ascii=False))
+    assert card_text(i) == "🆕 Завести тему «Идеи для НАП»?"
+    assert buttons(card_kb(i)) == ["nt:5:c", "nt:5:o"]
+
+
+def test_theme_kb():
+    kb = theme_kb(5, ["Контент", "Разное"])
+    assert [b.text for row in kb.inline_keyboard for b in row] == ["Контент", "Разное", "✖️ Назад"]
+    assert buttons(kb) == ["th:5:0", "th:5:1", "bk2:5"]
 
 
 def test_l2_kb():

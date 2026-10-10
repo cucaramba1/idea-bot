@@ -25,6 +25,12 @@ def card_text(idea: Idea) -> str:
         if idea.deep:
             lines.append("🔍 дополнено")
         return "\n".join(lines)
+    if idea.status == "await_theme" and a and a.new_theme:
+        text = f"🆕 Завести тему «{a.new_theme['name']}»?"
+        closest = a.new_theme.get("closest_existing")
+        if closest:
+            text += f" Похоже на «{closest}», можно сразу туда."
+        return text
     return {
         "new": "⏳ Разбираю…",
         "raw": f"📝 Сохранил без разбора ({idea.error}). Лежит в «Разное» с тегом #неразобрано.",
@@ -51,6 +57,12 @@ def card_kb(idea: Idea) -> InlineKeyboardMarkup | None:
         rows = [[B(text="🔄 Повторить", callback_data=f"rt:{i}")]]
     elif idea.status == "await_dup":
         rows = [[B(text="➕ Дополнить", callback_data=f"du:{i}:a"), B(text="🆕 Новая", callback_data=f"du:{i}:n")]]
+    elif idea.status == "await_theme" and idea.parsed and idea.parsed.new_theme:
+        nt = idea.parsed.new_theme
+        row = [B(text=f"🆕 Создать «{nt['name']}»", callback_data=f"nt:{i}:c")]
+        if nt.get("closest_existing"):
+            row.append(B(text=f"📂 Использовать «{nt['closest_existing']}»", callback_data=f"nt:{i}:u"))
+        rows = [row, [B(text="📋 Другая тема", callback_data=f"nt:{i}:o")]]
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -58,4 +70,10 @@ def l2_kb(idea_id: int, names: list[str], selected: set[int]) -> InlineKeyboardM
     rows = [[B(text=("✅ " if n in selected else "") + name, callback_data=f"tg:{idea_id}:{n}")]
             for n, name in enumerate(names)]
     rows.append([B(text="✅ Готово", callback_data=f"ok:{idea_id}"), B(text="✖️ Назад", callback_data=f"bk:{idea_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def theme_kb(idea_id: int, themes: list[str]) -> InlineKeyboardMarkup:
+    rows = [[B(text=name, callback_data=f"th:{idea_id}:{n}")] for n, name in enumerate(themes)]
+    rows.append([B(text="✖️ Назад", callback_data=f"bk2:{idea_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
