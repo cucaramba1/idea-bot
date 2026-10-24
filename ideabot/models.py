@@ -16,6 +16,7 @@ class Part:
     voice: str | None = None    # путь к аудио, пока не расшифровано
     was_voice: bool = False
     has_video: bool = False
+    msg_id: int | None = None   # id сообщения в Telegram: по нему находим идею, когда Некит правит сообщение
 
 
 @dataclass

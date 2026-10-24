@@ -7,8 +7,8 @@ from pathlib import Path
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
-from aiogram.types import (CallbackQuery, Message, MessageOriginChannel, MessageOriginChat,
-                           MessageOriginHiddenUser, MessageOriginUser)
+from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageOriginChannel,
+                           MessageOriginChat, MessageOriginHiddenUser, MessageOriginUser)
 
 from .cards import card_kb, card_text, l2_kb, theme_kb
 from .collector import Collector
@@ -109,6 +109,7 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
     r = Router()
     r.message.filter(F.from_user.id == s.owner_id)
     r.callback_query.filter(F.from_user.id == s.owner_id)
+    r.edited_message.filter(F.from_user.id == s.owner_id)  # фильтр message на правки не действует
     picks: dict[int, tuple[list[str], set[int]]] = {}
     notifier = pipeline.notifier
 
@@ -122,7 +123,40 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
         if part is None:
             await m.answer("Такое не понимаю: нужен текст, голос, фото или форвард.")
             return
+        part.msg_id = m.message_id
         collector.add(m.chat.id, part)
+
+    edits: dict[int, str] = {}  # msg_id -> новый текст, ждёт кнопки «Переписать»
+
+    @r.edited_message()
+    async def edited(m: Message):
+        text = m.text or m.caption or ""
+        if not text or collector.edit(m.chat.id, m.message_id, text):
+            return
+        idea = db.by_msg(m.chat.id, m.message_id)
+        if idea is None:
+            return
+        if idea.status == "new":  # ещё в очереди: разберём уже с правкой
+            pipeline.apply_edit(idea.id, m.message_id, text)
+            return
+        if idea.status == "undone":
+            return
+        edits[m.message_id] = text
+        title = idea.parsed.title if idea.parsed else "идея"
+        await m.reply(f"Это сообщение уже в идее «{title}». Переписать заметку с правкой?",
+                      reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                          InlineKeyboardButton(text="✏️ Переписать с правкой", callback_data=f"ed:{idea.id}:{m.message_id}")]]))
+
+    @r.callback_query(F.data.regexp(r"^ed:\d+:\d+$"))
+    async def rewrite(c: CallbackQuery):
+        _, i, mid = c.data.split(":")
+        text = edits.pop(int(mid), None)
+        if text is None:
+            await c.answer("Правка устарела, поправь сообщение ещё раз")
+            return
+        await c.message.edit_reply_markup(reply_markup=None)
+        await c.answer("Переписываю")
+        pipeline.spawn(pipeline.rewrite(int(i), int(mid), text), int(i))
 
     def _id(c: CallbackQuery) -> int:
         return int(c.data.split(":")[1])

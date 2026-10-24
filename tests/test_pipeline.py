@@ -324,3 +324,38 @@ def test_claude_logout_alerts_once_with_backoff(settings, tmp_path):
     alerts = [t for k, t in p.notifier.events if k == "error"]
     assert len(alerts) == 1 and "/login" in alerts[0]  # три сбоя подряд, алерт один
     assert all(db.get(i).status == "raw" for i in ids)
+
+
+def test_edit_before_and_after_saving(settings, tmp_path):
+    db, p = make(settings, tmp_path, FakeBrain(A()))
+    i = db.create(1, Incoming([Part(text="кофейня у моря", msg_id=5)]))
+    assert db.by_msg(1, 5).id == i and db.by_msg(1, 6) is None and db.by_msg(2, 5) is None
+    p.apply_edit(i, 5, "кофейня у моря с коворкингом")  # ещё в очереди
+    asyncio.run(p.process(i))
+    first = db.get(i)
+    assert first.status == "saved" and "коворкингом" in first.incoming.own_text()
+    old_note = settings.vault / first.note_path
+    assert old_note.exists()
+    asyncio.run(p.rewrite(i, 5, "кофейня у моря с коворкингом и прокатом сапов"))
+    assert not old_note.exists() and db.get(i).status == "new"  # старая заметка откатилась
+    asyncio.run(p.process(i))
+    again = db.get(i)
+    assert again.status == "saved" and "сапов" in again.incoming.own_text()
+    assert (settings.vault / again.note_path).exists()
+
+
+def test_collector_edit_changes_buffered_part():
+    from ideabot.collector import Collector
+
+    async def flush(chat, parts):
+        pass
+    c = Collector(10, flush)
+
+    async def go():
+        c.add(1, Part(text="опечатка", msg_id=7))
+        ok = c.edit(1, 7, "исправил")
+        res = (ok, c._buf[1][0].text, c.edit(1, 8, "x"))
+        for t in c._timers.values():
+            t.cancel()
+        return res
+    assert asyncio.run(go()) == (True, "исправил", False)

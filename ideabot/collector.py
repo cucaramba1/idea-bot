@@ -23,6 +23,14 @@ class Collector:
             t.cancel()
         self._timers[chat_id] = asyncio.create_task(self._later(chat_id))
 
+    def edit(self, chat_id: int, msg_id: int, text: str) -> bool:
+        """Правка сообщения, которое ещё ждёт склейки: просто меняем текст."""
+        for p in self._buf.get(chat_id, []):
+            if p.msg_id == msg_id:
+                p.text = text
+                return True
+        return False
+
     async def _later(self, chat_id: int) -> None:
         await asyncio.sleep(self.window)
         self._timers.pop(chat_id, None)

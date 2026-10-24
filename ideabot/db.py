@@ -89,6 +89,15 @@ class DB:
         self.c.execute(f"UPDATE ideas SET {sets} WHERE id=?", (*fields.values(), idea_id))
         self.c.commit()
 
+    def by_msg(self, chat_id: int, msg_id: int):
+        """Идея, в которую вошло сообщение msg_id (payload хранит части с msg_id)."""
+        for row in self.c.execute("SELECT id FROM ideas WHERE chat_id=? AND payload LIKE ? ORDER BY id DESC",
+                                  (chat_id, f'%"msg_id": {int(msg_id)}%')):
+            idea = self.get(row["id"])
+            if any(p.msg_id == msg_id for p in idea.incoming.parts):
+                return idea
+        return None
+
     def by_status(self, *statuses: str) -> list[Idea]:
         q = ",".join("?" * len(statuses))
         rows = self.c.execute(f"SELECT * FROM ideas WHERE status IN ({q}) ORDER BY id", statuses).fetchall()

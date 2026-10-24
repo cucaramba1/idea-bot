@@ -253,6 +253,26 @@ class Pipeline:
             self.writer.add_deep(idea_id, md)
         await self.notifier.refresh(idea_id)
 
+    def apply_edit(self, idea_id: int, msg_id: int, text: str) -> None:
+        idea = self.db.get(idea_id)
+        inc = idea.incoming
+        for p in inc.parts:
+            if p.msg_id == msg_id:
+                p.text = text
+        self.db.update(idea_id, payload=inc.to_json())
+
+    async def rewrite(self, idea_id: int, msg_id: int, text: str) -> None:
+        """«Переписать с правкой»: старая заметка и связи откатываются, идея с новым текстом разбирается заново."""
+        idea = self.db.get(idea_id)
+        if idea is None or idea.status in ("new", "undone"):
+            return
+        async with self.vault_lock:
+            self.writer.undo(idea_id)
+        self.apply_edit(idea_id, msg_id, text)
+        self.db.update(idea_id, status="new", analysis=None, error=None, deep=0, mode=None)
+        await self.notifier.busy(idea_id, "⏳ Разбираю с правкой…")
+        self.submit(idea_id)
+
     async def undo(self, idea_id: int) -> None:
         async with self.vault_lock:
             self.writer.undo(idea_id)
