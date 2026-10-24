@@ -37,13 +37,19 @@ class Writer:
                 out.append(w)
         return out
 
+    def _related(self, a: Analysis | None) -> list[str]:
+        rel_dir = self._rel(self.s.ideas_dir)
+        return [wikilink(f"{rel_dir}/{name}.md") for name in (a.related if a else [])
+                if (self.s.ideas_dir / f"{name}.md").exists()]
+
     def save_new(self, idea_id: int, a: Analysis, inc: Incoming, index: VaultIndex | None) -> str:
         path = unique_note_path(self.s.ideas_dir, a.title)
         rel = self._rel(path)
         meta = {"type": a.type, "theme": a.theme, "created": date.today().isoformat(), "source": inc.source(),
                 "forward_from": ", ".join(o for o, _, _ in inc.forwards()) or None, "score": a.score,
                 "idea_bot_id": idea_id}
-        atomic_write(path, render_note(meta, a.title, a.body_md, render_source(inc), self._wikilinks(a.links, index)))
+        atomic_write(path, render_note(meta, a.title, a.body_md, render_source(inc),
+                                       self._wikilinks(a.links, index) + self._related(a)))
         self.db.update(idea_id, note_path=rel)  # сразу: если дальше упадём, undo найдёт что откатить
         moc_add(self.s.moc_path, a.theme, f"[[{path.stem}]]")
         cv = Canvas.load(self.s.ideas_canvas_path)
@@ -102,7 +108,8 @@ class Writer:
         self._remove_canvas_links(rows)
         self.db.delete_links([r["id"] for r in rows])
         path = self.s.vault / idea.note_path
-        atomic_write(path, set_links(path.read_text("utf-8"), self._wikilinks(links, index)))
+        # похожие идеи остаются: «Поменять холсты» меняет только холсты
+        atomic_write(path, set_links(path.read_text("utf-8"), self._wikilinks(links, index) + self._related(idea.parsed)))
         self._sync_l2(idea_id, idea.note_path, links, index)
 
     def append(self, idea_id: int, target_title: str, a: Analysis, inc: Incoming, index: VaultIndex) -> str:

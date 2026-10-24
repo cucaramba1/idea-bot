@@ -78,6 +78,7 @@ class Analysis:
     duplicate_of: str | None = None
     unknown_tags: list[str] = field(default_factory=list)
     new_theme: dict | None = None
+    related: list[str] = field(default_factory=list)  # похожие уже записанные идеи (stem заметок)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -49,6 +49,7 @@ body_md по типу (markdown, жирные подписи полей):
 - theme: строго одна из перечисленных тем.
 - links: 1-3 холста L2 по смыслу, явно указанные холсты включи обязательно. l3: точное название заметки или группы этого холста, если есть близкая по смыслу; l3_kind: file для заметки, group для группы, none если подходящей нет.
 - duplicate_of: точное название уже существующей идеи, если новая по сути о том же, иначе null.
+- related: до 3 точных названий из «Уже существующие идеи», которые близки по смыслу, но не дубль (та же аудитория, тот же продукт, можно объединить). Нет таких: [].
 - score: целое 1-10 только для бизнеса, иначе null.
 - new_theme: заполняй только если текст явно и прямо просит завести новую тему или подхолст («создай тему», «заведи подхолст», «новая категория» и подобное). Никогда не заполняй её из-за того, что идея просто не вписывается ни в одну существующую тему, для этого есть фоллбек. Если заполняешь: name короткое название в стиле существующих тем, closest_existing самая близкая по смыслу существующая тема, если такая прослеживается, иначе null. Если не заполняешь, верни new_theme: null.
 """
@@ -85,8 +86,9 @@ ANALYSIS_SCHEMA = {
         "links": {"type": "array", "items": _LINK_ITEM},
         "duplicate_of": {"type": ["string", "null"]},
         "new_theme": _NEW_THEME,
+        "related": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["type", "theme", "title", "body_md", "score", "links", "duplicate_of", "new_theme"],
+    "required": ["type", "theme", "title", "body_md", "score", "links", "duplicate_of", "new_theme", "related"],
 }
 LINKS_SCHEMA = {"type": "object", "properties": {"links": {"type": "array", "items": _LINK_ITEM}},
                 "required": ["links"]}
@@ -213,9 +215,11 @@ def validate(raw: dict, index: VaultIndex, s: Settings, explicit: list[str], unk
         elif name:
             closest = nt.get("closest_existing")
             new_theme = {"name": name, "closest_existing": closest if closest in s.themes else None}
+    dup = dup if dup in index.ideas else None
+    # только реально существующие идеи (код проверяет каждую, как в smixs/autograph enrich.py)
+    related = list(dict.fromkeys(r for r in raw.get("related") or [] if r in index.ideas and r != dup))[:3]
     return Analysis(type=t, theme=theme, title=title, body_md=demote((raw.get("body_md") or "").strip()), score=score,
-                    links=links, duplicate_of=dup if dup in index.ideas else None, unknown_tags=unknown,
-                    new_theme=new_theme)
+                    links=links, duplicate_of=dup, unknown_tags=unknown, new_theme=new_theme, related=related)
 
 
 class Brain:

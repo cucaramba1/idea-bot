@@ -359,3 +359,17 @@ def test_collector_edit_changes_buffered_part():
             t.cancel()
         return res
     assert asyncio.run(go()) == (True, "исправил", False)
+
+
+def test_related_ideas_are_validated_and_linked(settings, tmp_path):
+    from ideabot.brain import validate
+    from ideabot.vault.index import build_index
+    ix = build_index(settings)
+    raw = {"type": "мысль", "theme": "Мысли и заметки", "title": "Т", "body_md": "b", "links": [],
+           "duplicate_of": None, "new_theme": None, "related": ["Старая идея", "Выдуманная", "Старая идея"]}
+    assert validate(raw, ix, settings, [], []).related == ["Старая идея"]  # выдуманное и повторы отброшены
+    db, p = make(settings, tmp_path, FakeBrain(A(related=["Старая идея"])))
+    i = db.create(1, Incoming([Part(text="мысль")]))
+    asyncio.run(p.process(i))
+    text = (settings.vault / db.get(i).note_path).read_text("utf-8")
+    assert "Старая идея]]" in text.split("## Связанные заметки")[-1]
