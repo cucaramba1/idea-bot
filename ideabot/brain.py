@@ -94,7 +94,9 @@ LINKS_SCHEMA = {"type": "object", "properties": {"links": {"type": "array", "ite
 
 async def run_claude(s: Settings, prompt: str, *, system: str, schema: dict | None = None,
                      tools: tuple[str, ...] = (), add_dirs: tuple[str, ...] = (), timeout: int) -> dict | str:
-    args = [s.claude_bin, "-p", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--output-format", "json", "--no-session-persistence",
+    # stream-json + partial: события идут всё время генерации, поэтому тишину можно отличить от долгой работы
+    args = [s.claude_bin, "-p", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--output-format", "stream-json",
+            "--verbose", "--include-partial-messages", "--no-session-persistence",
             "--system-prompt", system, "--tools", ",".join(tools)]
     if tools:
         args += ["--allowedTools", ",".join(tools)]  # без этого в -p тул упрётся в запрос разрешения
@@ -108,25 +110,45 @@ async def run_claude(s: Settings, prompt: str, *, system: str, schema: dict | No
     try:
         proc = await asyncio.create_subprocess_exec(
             *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(s.data_dir), env=env)
+            cwd=str(s.data_dir), env=env, limit=16 * 1024 * 1024)  # строка result с длинным ответом больше 64 КБ
     except OSError as e:  # бинарь не найден, нет прав на запуск и т.п. (частый случай под launchd)
         raise BrainError(f"не смог запустить claude: {e}")
+    data, err = None, b""
     try:
-        out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout)
-    except asyncio.TimeoutError:
-        raise BrainError(f"claude не ответил за {timeout} с", kind="timeout")
+        proc.stdin.write(prompt.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        err_task = asyncio.create_task(proc.stderr.read())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            left = deadline - loop.time()
+            if left <= 0:
+                raise BrainError(f"claude не ответил за {timeout} с", kind="timeout")
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), min(s.claude_stall, left))
+            except asyncio.TimeoutError:
+                if loop.time() >= deadline:
+                    raise BrainError(f"claude не ответил за {timeout} с", kind="timeout")
+                raise BrainError(f"claude молчит {s.claude_stall} с, похоже завис", kind="timeout")
+            if not line:
+                break
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict) and ev.get("type") in (None, "result"):
+                data = ev  # итог потока (или весь ответ одним объектом)
+        await proc.wait()
+        err = await err_task
     finally:
-        if proc.returncode is None:  # таймаут или отмена задачи (стоп бота): не оставляем сироту claude
+        if proc.returncode is None:  # таймаут, зависание или отмена задачи (стоп бота): не оставляем сироту claude
             proc.kill()
             await proc.wait()
     if proc.returncode != 0:
         raise BrainError(f"claude exit {proc.returncode}: {err.decode(errors='ignore')[-300:]}")
-    try:
-        data = json.loads(out)
-    except ValueError:
+    if data is None:
         raise BrainError("claude вернул не JSON")
-    if not isinstance(data, dict):
-        raise BrainError("claude вернул не объект")
     if data.get("is_error"):
         raise BrainError(f"claude: {str(data.get('result'))[:300]}")
     if schema is not None:

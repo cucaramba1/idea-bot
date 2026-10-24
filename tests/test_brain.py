@@ -130,3 +130,12 @@ def test_pick_l3_keeps_exactly_requested(tmp_path, settings):
     a = Analysis(type="мысль", theme="Разное", title="T", body_md="B")
     links = asyncio.run(Brain(settings).pick_l3(a, ["Досуг", "Обо мне"], ix))
     assert links == [Link("Досуг", "Кино", "group"), Link("Обо мне")]
+
+
+def test_run_claude_stall_is_detected_before_total_timeout(tmp_path, settings):
+    import dataclasses, time
+    s2 = dataclasses.replace(settings, claude_bin=fake_claude(tmp_path, {}, sleep=5), claude_stall=1)
+    t = time.monotonic()
+    with pytest.raises(BrainError, match="молчит") as e:
+        asyncio.run(run_claude(s2, "x", system="S", timeout=30))
+    assert e.value.kind == "timeout" and time.monotonic() - t < 4

@@ -28,6 +28,7 @@ class Settings:
     deep_timeout: int
     retry_every: int
     max_index_chars: int
+    claude_stall: int = 120  # claude молчит столько секунд (ни одного события потока): завис, не ждём общий таймаут
 
     @property
     def data_dir(self) -> Path:
@@ -84,6 +85,7 @@ def load_settings(root: Path | None = None) -> Settings:
         collect_window=float(cfg["collect_window"]),
         claude_timeout=int(cfg["claude_timeout"]),
         deep_timeout=int(cfg["deep_timeout"]),
+        claude_stall=int(cfg.get("claude_stall", 120)),
         retry_every=int(cfg["retry_every"]),
         max_index_chars=int(cfg["max_index_chars"]),
     )
