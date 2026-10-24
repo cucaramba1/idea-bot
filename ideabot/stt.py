@@ -28,9 +28,11 @@ async def transcribe(s: Settings, audio: Path) -> str:
             try:
                 _, err = await asyncio.wait_for(proc.communicate(), timeout=300)
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
                 raise RuntimeError("Whisper не успел за 5 минут")
+            finally:
+                if proc.returncode is None:  # и при отмене: модель на 1.5 ГБ не должна пережить бота
+                    proc.kill()
+                    await proc.wait()
             if proc.returncode != 0:
                 log.error("whisper failed: %s", err.decode(errors="ignore")[-500:])
                 raise RuntimeError("Whisper не смог расшифровать голос")

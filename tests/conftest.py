@@ -59,6 +59,8 @@ def vault(tmp_path) -> Path:
 def settings(tmp_path, vault, monkeypatch) -> Settings:
     root = tmp_path / "app"
     shutil.copytree(PROJECT / "config", root / "config")
+    # темы фиксированные: бот сам дописывает живой config/themes.yaml, и тесты на «новую тему» ломались
+    shutil.copy(PROJECT / "tests" / "fixtures" / "themes.yaml", root / "config" / "themes.yaml")
     monkeypatch.setenv("BOT_TOKEN", "123:abc")
     monkeypatch.setenv("OWNER_ID", "42")
     monkeypatch.setenv("VAULT_DIR", str(vault))

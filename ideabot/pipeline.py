@@ -40,10 +40,22 @@ class Pipeline:
     def submit(self, idea_id: int) -> None:
         self.q.put_nowait(("process", idea_id, ()))
 
-    def spawn(self, coro) -> None:
-        t = asyncio.create_task(coro)
+    def spawn(self, coro, idea_id: int | None = None) -> None:
+        t = asyncio.create_task(self._guarded(coro, idea_id))
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
+
+    async def _guarded(self, coro, idea_id: int | None) -> None:
+        """Ошибка кнопочной задачи в лог и перерисовка карточки, иначе она висит на «⏳…» без кнопок."""
+        try:
+            await coro
+        except Exception:
+            log.exception("фоновая задача #%s упала", idea_id)
+            if idea_id is not None:
+                try:
+                    await self.notifier.refresh(idea_id)
+                except Exception:
+                    log.exception("refresh #%s", idea_id)
 
     def startup(self) -> None:
         for idea in self.db.by_status("new"):
@@ -192,6 +204,10 @@ class Pipeline:
             log.warning("pick_l3 #%s: %s", idea_id, e)
             links = [Link(n) for n in l2_names if n in index.l2]
         async with self.vault_lock:
+            idea = self.db.get(idea_id)
+            if idea is None or idea.status != "saved":  # пока claude думал, идею отменили
+                await self.notifier.refresh(idea_id)
+                return
             self.writer.relink(idea_id, links, index)
         a.links = links
         self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False))
@@ -208,6 +224,10 @@ class Pipeline:
             await self.notifier.refresh(idea_id)
             return
         async with self.vault_lock:
+            idea = self.db.get(idea_id)
+            if idea is None or idea.status != "saved" or idea.deep:  # отменили или второй тап уже дописал
+                await self.notifier.refresh(idea_id)
+                return
             self.writer.add_deep(idea_id, md)
         await self.notifier.refresh(idea_id)
 

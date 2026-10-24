@@ -57,7 +57,12 @@ async def to_part(m: Message, s: Settings) -> Part | None:
         media, name = m.video_note, "note.mp4"
     if media:
         folder.mkdir(parents=True, exist_ok=True)
-        await m.bot.download(media, destination=folder / name)
+        try:
+            await m.bot.download(media, destination=folder / name)
+        except TelegramBadRequest as e:  # больше 20 МБ Bot API не отдаёт
+            log.warning("download %s: %s", name, e)
+            await m.answer("Не смог скачать файл (у Telegram лимит для ботов 20 МБ). Пришли голос короче или текстом.")
+            return Part(text=text, origin=origin) if text else None
         return Part(text=text, origin=origin, voice=str(folder / name))
     if m.photo:
         folder.mkdir(parents=True, exist_ok=True)
@@ -155,7 +160,7 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
             return
         await c.answer("Перевешиваю…")
         await notifier.busy(i, "🔁 Перевешиваю связи…")
-        pipeline.spawn(pipeline.relink(i, names))
+        pipeline.spawn(pipeline.relink(i, names), i)
 
     @r.callback_query(F.data.regexp(r"^bk:\d+$"))
     async def back(c: CallbackQuery):
@@ -167,24 +172,24 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
     async def deep(c: CallbackQuery):
         await c.answer("Копаю, это 1-3 минуты")
         await notifier.busy(_id(c), "🔍 Копаю глубже, 1-3 минуты…")
-        pipeline.spawn(pipeline.deep(_id(c)))
+        pipeline.spawn(pipeline.deep(_id(c)), _id(c))
 
     @r.callback_query(F.data.regexp(r"^un:\d+$"))
     async def undo(c: CallbackQuery):
         await c.answer()
-        pipeline.spawn(pipeline.undo(_id(c)))
+        pipeline.spawn(pipeline.undo(_id(c)), _id(c))
 
     @r.callback_query(F.data.regexp(r"^du:\d+:[an]$"))
     async def dup(c: CallbackQuery):
         await c.answer()
         await notifier.busy(_id(c), "⏳ Записываю…")
-        pipeline.spawn(pipeline.resolve_duplicate(_id(c), append=c.data.endswith(":a")))
+        pipeline.spawn(pipeline.resolve_duplicate(_id(c), append=c.data.endswith(":a")), _id(c))
 
     @r.callback_query(F.data.regexp(r"^nt:\d+:c$"))
     async def new_theme_create(c: CallbackQuery):
         await c.answer()
         await notifier.busy(_id(c), "🆕 Завожу тему…")
-        pipeline.spawn(pipeline.resolve_theme_create(_id(c)))
+        pipeline.spawn(pipeline.resolve_theme_create(_id(c)), _id(c))
 
     @r.callback_query(F.data.regexp(r"^nt:\d+:u$"))
     async def new_theme_use_closest(c: CallbackQuery):
@@ -197,7 +202,7 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
             return
         await c.answer()
         await notifier.busy(i, "⏳ Записываю…")
-        pipeline.spawn(pipeline.resolve_theme_existing(i, closest))
+        pipeline.spawn(pipeline.resolve_theme_existing(i, closest), i)
 
     @r.callback_query(F.data.regexp(r"^nt:\d+:o$"))
     async def new_theme_other(c: CallbackQuery):
@@ -215,7 +220,7 @@ def build_router(s: Settings, db: DB, pipeline: Pipeline, collector: Collector) 
             return
         await c.answer()
         await notifier.busy(i, "⏳ Записываю…")
-        pipeline.spawn(pipeline.resolve_theme_existing(i, names[n]))
+        pipeline.spawn(pipeline.resolve_theme_existing(i, names[n]), i)
 
     @r.callback_query(F.data.regexp(r"^bk2:\d+$"))
     async def theme_back(c: CallbackQuery):

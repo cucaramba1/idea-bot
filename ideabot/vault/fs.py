@@ -13,6 +13,7 @@ def atomic_write(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
+        os.chmod(tmp, 0o644)  # mkstemp даёт 0600, после replace заметки и холсты становились 0600
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

@@ -69,3 +69,13 @@ def test_moc_add_into_existing_and_new_heading(tmp_path):
     assert "[[Новая]]" not in text and "## Геймдизайн\n\n- [[Старая]]\n" in text
     notes.moc_remove(moc, "[[Ролик]]")
     assert "## Контент" not in moc.read_text("utf-8")
+
+
+def test_links_heading_inside_body_is_not_the_links_section():
+    from ideabot.vault.notes import set_links, get_links, add_section
+    text = ("# T\n\nразбор\n### Связанные заметки\nтело, которое нельзя терять\n\n"
+            "> ## Связанные заметки\n\n## Связанные заметки\n- [[A]]\n")
+    out = set_links(text, ["[[B]]"])
+    assert "тело, которое нельзя терять" in out and "> ## Связанные заметки" in out
+    assert get_links(out) == ["[[B]]"]
+    assert add_section(out, "Копнули глубже", "x").index("## Копнули глубже") > out.index("тело")

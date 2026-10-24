@@ -59,8 +59,18 @@ def render_note(meta: dict, title: str, body_md: str, source_text: str, links: l
             f"{LINKS_H}\n{_links_block(links)}\n")
 
 
+def _heading_pos(text: str, heading_line: str, last: bool = False) -> int:
+    """Начало строки-заголовка целиком: «### …» из разбора и «> ## …» из цитаты не считаются."""
+    found = [m.start() for m in re.finditer(rf"(?m)^{re.escape(heading_line)}[ \t]*$", text)]
+    return (found[-1] if last else found[0]) if found else -1
+
+
+def _links_pos(text: str) -> int:
+    return _heading_pos(text, LINKS_H, last=True)
+
+
 def get_links(text: str) -> list[str]:
-    i = text.find(LINKS_H)
+    i = _links_pos(text)
     if i == -1:
         return []
     out = []
@@ -73,7 +83,7 @@ def get_links(text: str) -> list[str]:
 
 
 def set_links(text: str, links: list[str]) -> str:
-    i = text.find(LINKS_H)
+    i = _links_pos(text)
     if i == -1:
         return text.rstrip("\n") + f"\n\n{LINKS_H}\n{_links_block(links)}\n"
     j = text.find("\n## ", i + len(LINKS_H))
@@ -84,7 +94,7 @@ def set_links(text: str, links: list[str]) -> str:
 def add_section(text: str, heading: str, body: str) -> str:
     """Секция встаёт перед «Связанными заметками», чтобы они всегда были в конце."""
     block = f"## {heading}\n\n{body.strip()}\n\n"
-    i = text.find(LINKS_H)
+    i = _links_pos(text)
     if i == -1:
         return text.rstrip("\n") + "\n\n" + block
     return text[:i] + block + text[i:]
@@ -92,7 +102,7 @@ def add_section(text: str, heading: str, body: str) -> str:
 
 def remove_section(text: str, heading: str) -> str:
     h = f"## {heading}\n"
-    i = text.find(h)
+    i = _heading_pos(text, h[:-1])
     if i == -1:
         return text
     j = text.find("\n## ", i + len(h))

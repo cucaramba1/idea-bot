@@ -102,15 +102,19 @@ async def run_claude(s: Settings, prompt: str, *, system: str, schema: dict | No
     try:
         out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
         raise BrainError(f"claude не ответил за {timeout} с")
+    finally:
+        if proc.returncode is None:  # таймаут или отмена задачи (стоп бота): не оставляем сироту claude
+            proc.kill()
+            await proc.wait()
     if proc.returncode != 0:
         raise BrainError(f"claude exit {proc.returncode}: {err.decode(errors='ignore')[-300:]}")
     try:
         data = json.loads(out)
     except ValueError:
         raise BrainError("claude вернул не JSON")
+    if not isinstance(data, dict):
+        raise BrainError("claude вернул не объект")
     if data.get("is_error"):
         raise BrainError(f"claude: {str(data.get('result'))[:300]}")
     if schema is not None:
