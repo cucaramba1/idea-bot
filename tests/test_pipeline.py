@@ -306,3 +306,21 @@ def test_relink_deep_undo(settings, tmp_path):
     assert db.get(i).deep == 1
     asyncio.run(p.undo(i))
     assert db.get(i).status == "undone" and not (settings.vault / rel).exists()
+
+
+def test_claude_logout_alerts_once_with_backoff(settings, tmp_path):
+    brain = FakeBrain(A())
+    db, p = make(settings, tmp_path, brain)
+    err = BrainError("claude exit 1: Invalid API key · Please run /login")
+    assert err.kind == "login" and BrainError("You've hit your session limit · resets 8pm").kind == "limit"
+    assert BrainError("Context limit reached").kind == "error"
+
+    async def boom(inc, index):
+        raise err
+    brain.analyze = boom
+    ids = [db.create(1, Incoming([Part(text=f"идея {n}")])) for n in range(3)]
+    for i in ids:
+        asyncio.run(p.process(i))
+    alerts = [t for k, t in p.notifier.events if k == "error"]
+    assert len(alerts) == 1 and "/login" in alerts[0]  # три сбоя подряд, алерт один
+    assert all(db.get(i).status == "raw" for i in ids)

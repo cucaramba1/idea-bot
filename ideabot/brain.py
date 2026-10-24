@@ -13,8 +13,20 @@ from .vault.index import VaultIndex, render_for_prompt
 from .vault.notes import render_source
 
 
+# Тексты из CLI claude 25.10.2026 (логи dungeon-tasks, строки бинаря): разлогин и лимит подписки
+_LOGIN = re.compile(r"/login|invalid api key|not logged in|oauth token|authentication_error")
+_LIMIT = re.compile(r"hit your \w+ limit|limit reached|reached your \w+ (usage )?limit|out of extra usage")
+
+
 class BrainError(RuntimeError):
-    pass
+    """kind: login | limit | timeout | error. Статус вместо голого исключения (идея smixs/agent-second-brain):
+    по нему pipeline решает, слать ли алерт, а идея остаётся сырой и ждёт кнопки 🔄."""
+
+    def __init__(self, msg: str, kind: str | None = None):
+        super().__init__(msg)
+        t = msg.lower()
+        self.kind = kind or ("login" if _LOGIN.search(t) else "limit" if _LIMIT.search(t) and "context limit" not in t
+                             else "error")
 
 
 SYSTEM = """Ты разбираешь идеи Некита для его Obsidian. Отвечай по-русски, строго по JSON-схеме.
@@ -102,7 +114,7 @@ async def run_claude(s: Settings, prompt: str, *, system: str, schema: dict | No
     try:
         out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout)
     except asyncio.TimeoutError:
-        raise BrainError(f"claude не ответил за {timeout} с")
+        raise BrainError(f"claude не ответил за {timeout} с", kind="timeout")
     finally:
         if proc.returncode is None:  # таймаут или отмена задачи (стоп бота): не оставляем сироту claude
             proc.kill()

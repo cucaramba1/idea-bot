@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -27,6 +28,14 @@ class Notifier(Protocol):
     async def error(self, idea_id: int, text: str) -> None: ...
 
 
+CLAUDE_ALERTS = {
+    "login": "🔑 Claude разлогинен, идеи не разбираются. В терминале: claude, потом /login. "
+             "Сырые идеи потом разберу кнопкой 🔄.",
+    "limit": "⏳ У Claude кончился лимит подписки. Идеи сохраняю сырыми, после сброса лимита жми 🔄 на карточках.",
+}
+ALERT_FIRST, ALERT_MAX = 3600, 12 * 3600  # пауза между одинаковыми алертами: час, дальше вдвое, не больше 12 ч
+
+
 class Pipeline:
     def __init__(self, s: Settings, db: DB, writer: Writer, brain, stt: Callable[[Path], Awaitable[str]],
                  notifier: Notifier, index_fn=build_index):
@@ -36,6 +45,17 @@ class Pipeline:
         self.q: asyncio.Queue = asyncio.Queue()
         self.vault_lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
+        self._alerts: dict[str, tuple[float, float]] = {}  # kind -> (когда можно снова, следующая пауза)
+
+    async def claude_alert(self, idea_id: int, e: BrainError) -> None:
+        if e.kind not in CLAUDE_ALERTS:
+            return
+        now = time.monotonic()
+        nxt, pause = self._alerts.get(e.kind, (0.0, ALERT_FIRST))
+        if now < nxt:
+            return
+        self._alerts[e.kind] = (now + pause, min(pause * 2, ALERT_MAX))
+        await self.notifier.error(idea_id, CLAUDE_ALERTS[e.kind])
 
     def submit(self, idea_id: int) -> None:
         self.q.put_nowait(("process", idea_id, ()))
@@ -108,12 +128,14 @@ class Pipeline:
             a = await self.brain.analyze(inc, index)
         except BrainError as e:
             log.warning("brain #%s: %s", idea_id, e)
+            await self.claude_alert(idea_id, e)
             if idea.status != "raw":
                 async with self.vault_lock:
                     self.writer.save_raw(idea_id, inc)
             self.db.update(idea_id, status="raw", error=str(e))
             await self.notifier.refresh(idea_id)
             return
+        self._alerts.clear()  # claude снова отвечает: следующий сбой сообщим сразу
         self.db.update(idea_id, analysis=json.dumps(a.to_dict(), ensure_ascii=False), error=None)
         if a.duplicate_of:
             self.db.update(idea_id, status="await_dup")
