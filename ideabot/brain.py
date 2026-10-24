@@ -82,10 +82,11 @@ LINKS_SCHEMA = {"type": "object", "properties": {"links": {"type": "array", "ite
 
 async def run_claude(s: Settings, prompt: str, *, system: str, schema: dict | None = None,
                      tools: tuple[str, ...] = (), add_dirs: tuple[str, ...] = (), timeout: int) -> dict | str:
-    args = [s.claude_bin, "-p", "--output-format", "json", "--no-session-persistence",
+    args = [s.claude_bin, "-p", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--output-format", "json", "--no-session-persistence",
             "--system-prompt", system, "--tools", ",".join(tools)]
     if tools:
         args += ["--allowedTools", ",".join(tools)]  # без этого в -p тул упрётся в запрос разрешения
+    args += ["--model", os.environ.get("CLAUDE_BATCH_MODEL", "sonnet")]  # ночные батчи не на Opus
     for d in add_dirs:
         args += ["--add-dir", d]
     if schema is not None:
