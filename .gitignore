@@ -5,3 +5,8 @@ logs/
 __pycache__/
 *.pyc
 tmp/
+
+# Бэкапы env с живыми ключами и мусор macOS
+.env.*
+!.env.example
+.DS_Store
