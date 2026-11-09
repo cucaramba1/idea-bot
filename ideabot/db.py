@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS links(
   edge_id TEXT,
   wikilink TEXT
 );
+CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 """
+IDEA_COLS = ("id", "created_at", "status", "chat_id", "card_msg_id", "payload", "analysis", "note_path", "mode",
+             "append_to", "append_heading", "deep", "error")
 UPDATABLE = {"status", "card_msg_id", "payload", "analysis", "note_path", "mode",
              "append_to", "append_heading", "deep", "error"}
 
@@ -116,4 +119,25 @@ class DB:
 
     def delete_links(self, ids: list[int]) -> None:
         self.c.executemany("DELETE FROM links WHERE id=?", [(i,) for i in ids])
+        self.c.commit()
+
+
+    # --- служебное: счётчик и отметки пакетов записи (ideabot/packets.py) ---
+    def kv_get(self, k: str, default: str | None = None) -> str | None:
+        row = self.c.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+        return row["v"] if row else default
+
+    def kv_set(self, k: str, v) -> None:
+        self.c.execute("INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v)))
+        self.c.commit()
+
+    def sync_row(self, row: dict) -> None:
+        """Ноут: строка идеи с сервера. Новая вставляется целиком, у известной обновляется только то, что решает сервер;
+        note_path/append_* ведёт сам ноут (журнал отката лежит у него)."""
+        self.c.execute(
+            "INSERT OR IGNORE INTO ideas(id, created_at, status, chat_id, card_msg_id, payload, analysis, note_path, mode,"
+            " append_to, append_heading, deep, error) VALUES(:id,:created_at,:status,:chat_id,:card_msg_id,:payload,"
+            ":analysis,:note_path,:mode,:append_to,:append_heading,:deep,:error)", {**{k: None for k in IDEA_COLS}, **row})
+        self.c.execute("UPDATE ideas SET status=:status, payload=:payload, analysis=:analysis, mode=:mode, deep=:deep,"
+                       " error=:error WHERE id=:id", {**{k: None for k in IDEA_COLS}, **row})
         self.c.commit()

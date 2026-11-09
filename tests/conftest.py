@@ -65,5 +65,5 @@ def settings(tmp_path, vault, monkeypatch) -> Settings:
     monkeypatch.setenv("OWNER_ID", "42")
     monkeypatch.setenv("VAULT_DIR", str(vault))
     monkeypatch.setenv("CLAUDE_BIN", "claude")
-    monkeypatch.setenv("WHISPER_BIN", "mlx_whisper")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     return load_settings(root)

@@ -45,7 +45,10 @@ async def main() -> None:
     pipeline.startup()
     logging.getLogger("ideabot").info("Idea Bot запущен, vault: %s", s.vault)
     try:
-        await asyncio.gather(pipeline.run(), pipeline.retry_loop(), dp.start_polling(bot, handle_signals=False))
+        jobs = [pipeline.run(), pipeline.retry_loop(), dp.start_polling(bot, handle_signals=False)]
+        if pipeline.packet:
+            jobs.append(pipeline.ack_loop())
+        await asyncio.gather(*jobs)
     finally:
         await bot.session.close()
 

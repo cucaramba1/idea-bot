@@ -2,6 +2,22 @@
 
 Обновлено: 2026-10-01 (пачка 3, шаги 1-2 готовы, шаг 3 отложен). Этот файл читает каждая новая сессия первым делом.
 
+## Удалённый мозг (07.11.2026, пробный сервер Contabo)
+
+- Голос: `ideabot/stt.py` теперь Groq API (`GROQ_API_KEY` в `.env`), локального Whisper нет. Сбой Groq = статус `stt_failed` и кнопка повтора.
+- `claude -p`: `CLAUDE_BIN` в `.env` указывает на `tools/claude-remote/claude-remote.sh` (общий для ботов, README там). Он гонит тот же вызов на сервер по SSH (промпт в stdin, поток stream-json обратно). Локально запускает claude, если есть `--add-dir` (фото) или ssh не соединился (код 255). Откат: вернуть `CLAUDE_BIN=~/.npm-global/bin/claude` (старый `.env` лежит в `.env.bak-before-remote`).
+- Бот по-прежнему на ноуте и пишет в vault только он. Полный разрез (сервер принимает, ноут применяет пакеты) отложен: потребует переписать `pipeline.py` (7 операций с vault, журнал отката в `ideas.db`). Упрощать в эту сторону можно позже.
+- Тесты: `tests/test_claude_remote.py` (4 шт.), общий прогон 77 зелёных.
+
+## Бот на сервере (08.11.2026)
+
+- **Где что**: бот, разбор (`claude -p`, Groq) и очередь работают на Contabo (`~/idea-bot`, `systemctl --user status idea-bot`, `.env` с `APPLY_MODE=packet`, vault = зеркало `~/vault-mirror/main`). Дома бот остановлен (launchd disabled, из `boot-stagger` и `resource-guard` убран, копии `.bak-1108b`).
+- **Запись в vault пакетами** (`ideabot/packets.py`, образец `reels-radar/reels_radar/packets.py`): сервер кладёт пакет в `data/outbox` (имя с порядковым номером: `save`, `raw`, `relink`, `deep`, `undo`), идея получает статус `queued` (карточка «⏳ Записываю в vault (до 5 минут)…»). Ноутовый `com.cucaramba.idea-bot-applier` (launchd, раз в 5 минут, `python -m ideabot.applier`) забирает пакеты rsync, вызывает настоящие `Writer` и `add_theme` по реальному vault и возвращает ack; серверный `ack_loop` (каждые 20 с) обновляет базу и перерисовывает карточку. Журнал отката дома лежит в `data/applier.db` (копия `ideas.db` на момент переезда, поэтому отмена старых идей работает). Журнал `data/applied` дома делает повторную доставку безопасной.
+- **Ошибки**: сбой записи `save` = статус `write_failed` + сообщение, `retry_loop` ставит запись заново; сбой `relink/deep/undo` возвращает прежний статус.
+- **Откат**: на сервере `systemctl --user disable --now idea-bot`; дома `launchctl enable gui/$(id -u)/com.cucaramba.idea-bot`, `bootstrap`, сразу `disable`; свежую `ideas.db` скопировать с сервера (Python backup API). Домашний `ideas.db` остаётся замороженной копией на 08.11.
+- **Тесты**: `tests/test_packets.py` (7 шт.), общий прогон 84 зелёных.
+- **Не проверено живьём**: идея из Telegram до заметки через пакеты, кнопки 🔁 🔍 ↩️ «Переписать с правкой» через пакеты, голос на сервере, фото (путь к файлу остаётся серверным, в заметку попадает только «(фото: N шт.)»).
+
 ## Что это
 
 Telegram-бот: Некит кидает идею (текст, голос, форвард) → `claude -p` разбирает и оценивает → заметка в холсте «Творческие идеи» Obsidian + синк-ноды и wikilinks в холсты L2/L3.

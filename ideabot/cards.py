@@ -33,6 +33,7 @@ def card_text(idea: Idea) -> str:
         return text
     return {
         "new": "⏳ Разбираю…",
+        "queued": "⏳ Записываю в vault (до 5 минут)…",
         "raw": f"📝 Сохранил без разбора ({idea.error}). Лежит в «Разное» с тегом #неразобрано.",
         "stt_failed": f"🎙 Не смог расшифровать голос ({idea.error}). Файл сохранён, можно повторить.",
         "await_dup": f"🤔 Похоже на «{a.duplicate_of if a else ''}». Дополнить её или завести новую?",

@@ -16,8 +16,8 @@ class Settings:
     bot_token: str
     owner_id: int
     claude_bin: str
-    whisper_bin: str
-    whisper_model: str
+    groq_key: str
+    stt_model: str
     ideas_canvas: str
     themes: list[str]
     fallback_theme: str
@@ -75,8 +75,8 @@ def load_settings(root: Path | None = None) -> Settings:
         bot_token=env("BOT_TOKEN"),
         owner_id=int(env("OWNER_ID") or 0),
         claude_bin=env("CLAUDE_BIN", str(home / ".npm-global/bin/claude")),
-        whisper_bin=env("WHISPER_BIN", str(home / ".local/bin/mlx_whisper")),
-        whisper_model=env("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"),
+        groq_key=env("GROQ_API_KEY"),
+        stt_model=env("STT_MODEL", "whisper-large-v3-turbo"),
         ideas_canvas=cfg["ideas_canvas"],
         themes=themes,
         fallback_theme=th["fallback"],

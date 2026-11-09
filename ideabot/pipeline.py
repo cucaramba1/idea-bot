@@ -15,6 +15,7 @@ from .config import Settings
 from .config_themes import add_theme
 from .db import DB
 from .models import Analysis, Link
+from .packets import packet_mode, queue
 from .vault.index import build_index
 from .vault.sync import Writer
 
@@ -42,6 +43,7 @@ class Pipeline:
         self.s, self.db, self.writer, self.brain, self.stt = s, db, writer, brain, stt
         self.notifier = notifier
         self.index_fn = index_fn
+        self.packet = packet_mode()  # сервер: запись в vault уходит пакетом на ноут (ideabot/packets.py)
         self.q: asyncio.Queue = asyncio.Queue()
         self.vault_lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
@@ -129,10 +131,15 @@ class Pipeline:
         except BrainError as e:
             log.warning("brain #%s: %s", idea_id, e)
             await self.claude_alert(idea_id, e)
-            if idea.status != "raw":
-                async with self.vault_lock:
-                    self.writer.save_raw(idea_id, inc)
-            self.db.update(idea_id, status="raw", error=str(e))
+            if self.packet:
+                self.db.update(idea_id, status="raw", error=str(e))
+                if idea.status != "raw":
+                    queue(self.s, self.db, idea_id, "raw", hold=False)
+            else:
+                if idea.status != "raw":
+                    async with self.vault_lock:
+                        self.writer.save_raw(idea_id, inc)
+                self.db.update(idea_id, status="raw", error=str(e))
             await self.notifier.refresh(idea_id)
             return
         self._alerts.clear()  # claude снова отвечает: следующий сбой сообщим сразу
@@ -156,6 +163,10 @@ class Pipeline:
         if idea is None or idea.status not in WRITABLE_STATUSES:
             return  # идея уже записана/отменена: хвост повторной постановки в очередь
         a, inc = idea.parsed, idea.incoming
+        if self.packet:
+            queue(self.s, self.db, idea_id, "save")  # чистку связей и запись сделает ноут по настоящему vault
+            await self.notifier.refresh(idea_id)
+            return
         async with self.vault_lock:
             try:
                 if idea.note_path:
@@ -225,6 +236,13 @@ class Pipeline:
         except BrainError as e:
             log.warning("pick_l3 #%s: %s", idea_id, e)
             links = [Link(n) for n in l2_names if n in index.l2]
+        if self.packet:
+            if self.db.get(idea_id).status != "saved":  # пока claude думал, идею отменили
+                await self.notifier.refresh(idea_id)
+                return
+            queue(self.s, self.db, idea_id, "relink", links=[asdict(x) for x in links])
+            await self.notifier.refresh(idea_id)
+            return
         async with self.vault_lock:
             idea = self.db.get(idea_id)
             if idea is None or idea.status != "saved":  # пока claude думал, идею отменили
@@ -243,6 +261,14 @@ class Pipeline:
             md = await self.brain.deep_dive(idea.parsed)
         except BrainError as e:
             await self.notifier.error(idea_id, f"Не вышло копнуть глубже: {e}")
+            await self.notifier.refresh(idea_id)
+            return
+        if self.packet:
+            idea = self.db.get(idea_id)
+            if idea is None or idea.status != "saved" or idea.deep:
+                await self.notifier.refresh(idea_id)
+                return
+            queue(self.s, self.db, idea_id, "deep", md=md)
             await self.notifier.refresh(idea_id)
             return
         async with self.vault_lock:
@@ -266,6 +292,13 @@ class Pipeline:
         idea = self.db.get(idea_id)
         if idea is None or idea.status in ("new", "undone"):
             return
+        if self.packet:
+            if idea.status == "queued":
+                return
+            self.apply_edit(idea_id, msg_id, text)
+            queue(self.s, self.db, idea_id, "undo", after="reprocess")  # когда ноут откатит, on_acks запустит разбор заново
+            await self.notifier.busy(idea_id, "⏳ Откатываю старую заметку и разбираю с правкой…")
+            return
         async with self.vault_lock:
             self.writer.undo(idea_id)
         self.apply_edit(idea_id, msg_id, text)
@@ -274,7 +307,39 @@ class Pipeline:
         self.submit(idea_id)
 
     async def undo(self, idea_id: int) -> None:
+        if self.packet:
+            idea = self.db.get(idea_id)
+            if idea is None or idea.status in ("queued", "undone", "new"):
+                return
+            queue(self.s, self.db, idea_id, "undo")
+            await self.notifier.refresh(idea_id)
+            return
         async with self.vault_lock:
             self.writer.undo(idea_id)
         self.db.update(idea_id, status="undone")
         await self.notifier.refresh(idea_id)
+
+    async def on_acks(self, events: list[dict]) -> None:
+        """Ответы ноута (packets.read_acks): база уже обновлена, остаётся перерисовать карточку и запустить продолжение."""
+        for ev in events:
+            i = ev["idea_id"]
+            if ev["type"] == "failed":
+                await self.notifier.error(i, f"Не записал в vault ({ev['kind']}): {ev['error'][:200]}")
+                if ev["kind"] == "save":
+                    self.db.update(i, status="write_failed")  # retry_loop сам поставит запись заново
+            elif ev["kind"] == "undo" and ev["params"].get("after") == "reprocess":
+                self.db.update(i, status="new", analysis=None, error=None, deep=0, mode=None, note_path=None,
+                               append_to=None, append_heading=None)
+                await self.notifier.busy(i, "⏳ Разбираю с правкой…")
+                self.submit(i)
+                continue
+            await self.notifier.refresh(i)
+
+    async def ack_loop(self, every: int = 20) -> None:
+        from .packets import read_acks
+        while True:
+            try:
+                await self.on_acks(read_acks(self.s, self.db))
+            except Exception:
+                log.exception("ack_loop")
+            await asyncio.sleep(every)
